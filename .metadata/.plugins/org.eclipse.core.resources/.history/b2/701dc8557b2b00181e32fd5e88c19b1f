@@ -1,0 +1,170 @@
+/*
+ * resonantconverter.h
+ *
+ *  Created on: Jan 11, 2016
+ *      Author: pete
+ */
+
+#ifndef DCDC_H_
+#define DCDC_H_
+
+enum {DCDC_CMD_NONE, DCDC_CMD_START, DCDC_CMD_IDLE, DCDC_CMD_PRECHARGE, DCDC_CMD_UPDATE, DCDC_CMD_SHUTDOWN, DCDC_CMD_TESTMODE};
+enum {DCDC_MODE_NONE, DCDC_MODE_START, DCDC_MODE_IDLE, DCDC_MODE_RAMPING, DCDC_MODE_RUNNING_CC, DCDC_MODE_RUNNING_CV, DCDC_MODE_SHUTTINGDOWN, DCDC_MODE_ERROR, DCDC_MODE_TEST};
+enum {DCDC_SWITCHMODE_OFF, DCDC_SWITCHMODE_PWM, DCDC_SWITCHMODE_STATIC};
+enum {DCDC_INPUTVOLTAGE_ARRAY, DCDC_OUTPUTVOLTAGE_ARRAY, DCDC_VOLTAGE_ARRAY_MAX};
+enum {DCDC_FUNCTION_OFF, DCDC_FUNCTION_BUCK, DCDC_FUNCTION_BOOST};
+
+#define ADVANCED_WELDING		1
+//#define STERLING_POWER			1
+#if (ADVANCED_WELDING && STERLING_POWER)
+#error "Can not have two systems defined at once"
+#endif
+
+// Set SERIALNO to 0 for defaults
+#define 	SERIALNO			0
+
+/* Serial Numbers with Calibrations: 4, 5, 10, 11, 12, 13, 14*/
+
+
+#define		STEPARRAYMAX		32767
+#define		PARAMETERQTY		3
+#define		RCSTATEINDEX		1
+#define		VOLTSINDEX			2
+#define		PREVOLTSINDEX		3
+
+#ifdef		ADVANCED_WELDING
+#define		DCDC_OSC_FREQUENCY						72000000L
+#define		DCDC_SWITCH_FREQUENCY					100000
+#define     DCDC_MIN_INPUT_VOLTS					30
+#define     DCDC_INPUTV_FULL_SCALE					62
+#define     DCDC_OUTPUTV_FULL_SCALE					56
+#define     DCDC_OUTPUTI_FULL_SCALE					130
+#define		DCDC_OUTPUTI_VOLTAGE_OFFSET				1650
+#define		DCDC_PHASEI_FULL_SCALE					55
+#define		DCDC_PHASEI_VOLTAGE_OFFSET				1650
+#define     DCDC_MAX_OUTPUT_VOLTS					50
+#define     DCDC_MAX_OUTPUT_CURRENT					75
+#define		DCDC_MAX_OUTPUT_POWER					3000
+#endif
+#ifdef		STERLING_POWER
+#define		DCDC_OSC_FREQUENCY						72000000L
+#define		DCDC_SWITCH_FREQUENCY					100000
+#define     DCDC_MIN_INPUT_VOLTS					10
+#define     DCDC_INPUTV_FULL_SCALE					30
+#define     DCDC_OUTPUTV_FULL_SCALE					30
+#define     DCDC_OUTPUTI_FULL_SCALE					150
+#define     DCDC_MAX_OUTPUT_VOLTS					30
+#define     DCDC_MAX_OUTPUT_CURRENT					150
+#define		DCDC_MAX_OUTPUT_POWER					3000
+#endif
+
+#define		DCDC_VOLTAGE_PGAIN				01
+#define		DCDC_VOLTAGE_IGAIN				05		/* was 05 */
+#define		DCDC_CURRENT_PGAIN				00
+#define		DCDC_CURRENT_IGAIN				00
+#define 	DCDC_VOLTAGECONTROL_SATURATION			750
+#define     DCDC_CURRENTCONTROL_SATURATION			1000
+#define     DCDC_VOLTAGE_BIAS						1000				/* From Michael's model VBias is same as VOLTAGE SATURATION */
+#define		DCDC_MIN_PWM					100		/* 10% */
+#define     DCDC_MAX_PWM					900		/* 90% */
+
+#define		DCDC_SYSTICKRATE				100
+#define		DCDC_DEADTIME_NS							750 			//400
+#define 	DCDC_DEADTIME_TICKS						((DCDC_DEADTIME_NS / (1000000000L/DCDC_OSC_FREQUENCY)) & 0xFFFFFFFE) /* This needs to be an even number */
+#define		DCDC_SYSLED_TIMEOUT_IDLE					(DCDC_SYSTICKRATE / 2)
+#define		DCDC_SYSLED_TIMEOUT_RUN					((DCDC_SYSLED_TIMEOUT_IDLE) / 4)
+
+#define		DCDC_TEMP_RESISTOR						1000						/* Value of thermistor pull up resistor in ohms */
+#define 	DCDC_TEMP_SUPPLYV							3300						/* Value of temperature supply in mV */
+#define		DCDC_TEMP1_MIN							40
+#define		DCDC_TEMP1_MAX							70
+#define		DCDC_TEMP1_WARN							85
+#define		DCDC_TEMP1_ERR							100
+#define		DCDC_TEMP2_MIN							40
+#define		DCDC_TEMP2_MAX							70
+#define		DCDC_TEMP2_WARN							85
+#define		DCDC_TEMP2_ERR							100
+
+#define		DCDC_INPUT_UNDERVOLTAGE_WARN				575
+#define		DCDC_INPUT_UNDERVOLTAGE_ERR				550
+#define		DCDC_INPUT_OVERVOLTAGE_WARN				900
+#define		DCDC_INPUT_OVERVOLTAGE_ERR				925
+#define		DCDC_OUTPUT_OVERVOLTAGE_WARN				451
+#define		DCDC_OUTPUT_OVERVOLTAGE_ERR				475
+#define		DCDC_OVERCURRENT_WARN						260
+#define		DCDC_OVERCURRENT_ERR						275
+#define     DCDC_MINOUTPUT_CURRENT_DISCHARGE			30							/* Value in deciamps */
+#define		DCDC_MIN_DISCHARGED_VOLTAGE				10							/* Voltage at which RC thinks it is discharged */
+#define     DCDC_PULSESKIP_OVERVOLTAGE				3							/* Number of volts over target that pulse skipping starts */
+#define     DCDC_DISCHARGE_LOAD_OVERVOLTAGE			2							/* Number of volts over target that pulse skipping starts */
+
+#define		DCDC_BASE_CANID							0x300
+#define     DCDC_CAN_SETSTATE						(DCDC_BASE_CANID)
+#define     DCDC_CAN_STATUS1						(DCDC_BASE_CANID + 0x001)
+#define		DCDC_CAN_PERIOD							(DCDC_SYSTICKRATE / 10)
+
+#ifdef		ADVANCED_WELDING
+#define		BIT_GATE_BUF_ENABLE						(1 << 31)						/* GPIO0 bit 31 */
+#endif
+#ifdef		STERLING_POWER
+#define		BIT_GATE_BUF_ENABLE						(1 << 18)						/* GPIO1 bit 18 */
+#endif
+#define		BIT_ABORT								(1 << 3)						/* GPIO2 bit 3 */
+#define     BIT_FAULT								(1 << 0)						/* GPIO2 bit 0 */
+#define     BIT_LED_GENERIC							(1 << 1)						/* GPIO2 bit 1 */
+#define		BIT_SYS_LED								(1 << 2)						/* GPIO2 bit 2 */
+
+/* ADC0 allocations */
+
+/* ADC1 allocations */
+#define		DCDC_INPUTV_CHANNEL						2								/* ADC1_2 */
+#define		DCDC_OUTPUTV_CHANNEL					3								/* ADC1_3 */
+#define		DCDC_OUTPUTI_CHANNEL					7								/* ADC1_7 */
+#define		DCDC_APHASECURRENT_CHANNEL				4								/* ADC1_4 */
+#define		DCDC_BPHASECURRENT_CHANNEL				5								/* ADC1_5 */
+#define		DCDC_CPHASECURRENT_CHANNEL				6								/* ADC1_6 */
+#define		DCDC_ATEMP_CHANNEL						9								/* ADC1_9 */
+#define		DCDC_BTEMP_CHANNEL						10								/* ADC1_10 */
+#define		DCDC_CTEMP_CHANNEL						11								/* ADC1_11 */
+
+
+#define		DCDC_WARNINGCNTR_UP_RATE					5
+#define		DCDC_WARNING_LIMIT						100
+//#define		RC_ERRRORCNTR_UP_RATE					5
+
+/* Command codes */
+#define		DCDC_COMMAND_NONE							0x00
+#define		DCDC_COMMAND_RESET						0x01
+
+/* Warning codes */
+#define		DCDC_WARNING_NONE							0x0000
+#define		DCDC_WARNING_LOW_INPUT_VOLTAGE			0x0001
+#define		DCDC_WARNING_HIGH_INPUT_VOLTAGE			0x0002
+#define		DCDC_WARNING_HIGH_OUTPUT_VOLTAGE			0x0004
+#define		DCDC_WARNING_OVER_CURRENT					0x0008
+#define		DCDC_WARNING_COMMS						0x0010
+#define		DCDC_WARNING_OVER_TEMP_PHA				0x0020
+#define     DCDC_WARNING_OVER_TEMP_PHB				0x0040
+#define		DCDC_WARNING_OVER_TEMP_TEMP1				0x0080
+#define		DCDC_WARNING_OVER_TEMP_TEMP2				0x0100
+
+/* Error codes */
+#define		DCDC_ERROR_NONE							0x0000
+#define		DCDC_ERROR_LOW_INPUT_VOLTAGE				0x0001
+#define		DCDC_ERROR_HIGH_INPUT_VOLTAGE				0x0002
+#define		DCDC_ERROR_HIGH_OUTPUT_VOLTAGE			0x0004
+#define		DCDC_ERROR_OVER_CURRENT					0x0008
+#define		DCDC_ERROR_COMMS							0x0010
+#define		DCDC_ERROR_OVER_TEMP_PHA					0x0020
+#define     DCDC_ERROR_OVER_TEMP_PHB					0x0040
+#define		DCDC_ERROR_OVER_TEMP_TEMP1				0x0080
+#define		DCDC_ERROR_OVER_TEMP_TEMP2				0x0100
+
+void DCDC_Init(void);
+void DCDC_Main(void);
+void DCDC_Step(void);
+void ReadCurrent(void);
+void ReadOutputVoltage(void);
+void ReadInputVoltage(void);
+
+#endif /* DCDC_H_ */

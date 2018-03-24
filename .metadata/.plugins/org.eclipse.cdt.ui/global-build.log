@@ -1,0 +1,43 @@
+16:31:34 **** Incremental Build of configuration Debug for project Board_LPC1549_TQFP48 ****
+make -r all 
+make: Nothing to be done for 'all'.
+16:31:34 **** Incremental Build of configuration Debug for project lpc_board_nxp_lpcxpresso_1549 ****
+make -r all 
+make: Nothing to be done for 'all'.
+16:31:35 **** Incremental Build of configuration Debug for project lpc_chip_15xx ****
+make -r all 
+make: Nothing to be done for 'all'.
+16:31:35 **** Incremental Build of configuration Debug for project Converter ****
+make -r all 
+Building file: ../src/sct.c
+Invoking: MCU C Compiler
+arm-none-eabi-gcc -D__REDLIB__ -DDEBUG -D__CODE_RED -DCORE_M3 -D__LPC15XX__ -I"/home/pete/Dropbox/ProjectsTemporaryBackup/PRJ1107_AdvanceWelding/Software/Converter/inc" -I"/home/pete/Dropbox/ProjectsTemporaryBackup/PRJ1107_AdvanceWelding/Software/lpc_chip_15xx/inc" -O0 -g3 -Wall -c -fmessage-length=0 -fno-builtin -ffunction-sections -fdata-sections -mcpu=cortex-m3 -mthumb -D__REDLIB__ -specs=redlib.specs -MMD -MP -MF"src/sct.d" -MT"src/sct.o" -MT"src/sct.d" -o "src/sct.o" "../src/sct.c"
+Finished building: ../src/sct.c
+ 
+Building target: Converter.axf
+Invoking: MCU Linker
+arm-none-eabi-gcc -nostdlib -L"/home/pete/Dropbox/ProjectsTemporaryBackup/PRJ1107_AdvanceWelding/Software/lpc_chip_15xx/Debug" -Xlinker -Map="Converter.map" -Xlinker --gc-sections -mcpu=cortex-m3 -mthumb -T "ResonantConverter_Debug.ld" -o "Converter.axf"  ./src/adc.o ./src/can.o ./src/cr_startup_lpc15xx.o ./src/dcdc.o ./src/io.o ./src/main.o ./src/sct.o ./src/system_LPC15xx.o   -llpc_chip_15xx
+Finished building target: Converter.axf
+ 
+make --no-print-directory post-build
+Performing post-build steps
+arm-none-eabi-size "Converter.axf" ; arm-none-eabi-objcopy -O ihex "Converter.axf" "Converter.hex" ; # arm-none-eabi-objcopy -O binary "Converter.axf" "Converter.bin" ; checksum -p LPC1549 -d "Converter.bin"
+   text	   data	    bss	    dec	    hex	filename
+  10020	     40	   3996	  14056	   36e8	Converter.axf
+ 
+16:09:09 **** Clean-only build of configuration Debug for project Board_LPC1549_TQFP48 ****
+make -r clean 
+rm -rf  ./src/board.o ./src/board_sysinit.o  ./src/board.d ./src/board_sysinit.d  libBoard_LPC1549_TQFP48.a
+ 
+16:09:09 **** Clean-only build of configuration Debug for project Converter ****
+make -r clean 
+rm -rf  ./src/adc.o ./src/can.o ./src/cr_startup_lpc15xx.o ./src/dcdc.o ./src/io.o ./src/main.o ./src/sct.o ./src/system_LPC15xx.o  ./src/adc.d ./src/can.d ./src/cr_startup_lpc15xx.d ./src/dcdc.d ./src/io.d ./src/main.d ./src/sct.d ./src/system_LPC15xx.d  Converter.axf
+ 
+16:09:09 **** Clean-only build of configuration Debug for project lpc_board_nxp_lpcxpresso_1549 ****
+make -r clean 
+rm -rf  ./src/board.o ./src/board_sysinit.o  ./src/board.d ./src/board_sysinit.d  liblpc_board_nxp_lpcxpresso_1549.a
+ 
+16:09:09 **** Clean-only build of configuration Debug for project lpc_chip_15xx ****
+make -r clean 
+rm -rf  ./src/acmp_15xx.o ./src/adc_15xx.o ./src/chip_15xx.o ./src/clock_15xx.o ./src/crc_15xx.o ./src/dac_15xx.o ./src/dma_15xx.o ./src/eeprom.o ./src/gpio_15xx.o ./src/i2c_common_15xx.o ./src/i2cm_15xx.o ./src/i2cs_15xx.o ./src/iap.o ./src/iocon_15xx.o ./src/pinint_15xx.o ./src/pmu_15xx.o ./src/ring_buffer.o ./src/ritimer_15xx.o ./src/rtc_15xx.o ./src/sct_15xx.o ./src/sct_pwm_15xx.o ./src/sctipu_15xx.o ./src/spi_15xx.o ./src/stopwatch_15xx.o ./src/swm_15xx.o ./src/sysctl_15xx.o ./src/sysinit_15xx.o ./src/uart_15xx.o ./src/wwdt_15xx.o  ./src/acmp_15xx.d ./src/adc_15xx.d ./src/chip_15xx.d ./src/clock_15xx.d ./src/crc_15xx.d ./src/dac_15xx.d ./src/dma_15xx.d ./src/eeprom.d ./src/gpio_15xx.d ./src/i2c_common_15xx.d ./src/i2cm_15xx.d ./src/i2cs_15xx.d ./src/iap.d ./src/iocon_15xx.d ./src/pinint_15xx.d ./src/pmu_15xx.d ./src/ring_buffer.d ./src/ritimer_15xx.d ./src/rtc_15xx.d ./src/sct_15xx.d ./src/sct_pwm_15xx.d ./src/sctipu_15xx.d ./src/spi_15xx.d ./src/stopwatch_15xx.d ./src/swm_15xx.d ./src/sysctl_15xx.d ./src/sysinit_15xx.d ./src/uart_15xx.d ./src/wwdt_15xx.d  liblpc_chip_15xx.a
+ 

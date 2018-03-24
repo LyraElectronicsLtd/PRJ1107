@@ -1,0 +1,825 @@
+/*
+ * resonantconverter.c
+ *
+ *  Created on: Jan 11, 2016
+ *      Author: pete
+ */
+
+#include "dcdc.h"
+
+#include "type.h"
+#include "lpc_types.h"
+#include "chip.h"
+#include "can.h"
+#include "sct.h"
+
+
+/*
+ *
+ */
+const UINT8		AppName[] = "DC-DC Converter 3kW V0.01 " __DATE__ " " __TIME__ "\0";
+/* Temperature/resistance lookup tables for NTC thermistor 10k ohms at 25 deg C */
+const UINT32	thermistorResistances[29] = {335671, 242195, 176683, 130243, 96974, 72895, 55298, 42315, 32651, 25398, 19903, 15714, 12493, 10000,
+											8056, 6530, 5324, 4366, 3601, 2985, 2487, 2082, 1751, 1480, 1256, 1070, 916, 787, 678 };
+const INT8 thermistorTemperatures[29] = {-40, -35, -30, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100 };
+UINT16		SerialNo = 0;
+UINT16		mode, warningcntr, enabled, enable, dischargeON;
+UINT16		warningcode, errorcode, olderrorcode;
+UINT16		ledtimeout;
+
+UINT16		inputvoltage, targetinputvoltage, outputvoltage, targetoutputvoltage;					/* Voltages are in decivolts (V * 10) 0.1Vs */
+UINT16 		rampinguptargetinputvoltage = 0, rampinguptargetoutputvoltage = 0 ;						/* Voltages are in volts (V) */
+INT32		phaseAcurrent, phaseBcurrent, phaseCcurrent, outputcurrent, targetcurrent;									/* Currents are in deciamps (0.1As) */
+INT16		temp1, temp2, phaseAtemp, phaseBtemp;
+
+UINT16  	buckduty, boostduty;
+
+
+UINT32		canid;
+UINT8		canslot;
+UINT8		canrxslot, manualcanrxslot, gainsrxslot, fanrxslot, testrxslot;
+UINT8		cantxslot1, cantxslot2, cantxslot3, cantxslot4;
+UINT16		cancntr = 0;
+
+UINT8		fan1duty, fan2duty;
+UINT8		prechargestate, dischargestate;
+
+INT16		voltagems[DCDC_VOLTAGE_ARRAY_MAX], voltagecs[DCDC_VOLTAGE_ARRAY_MAX];
+
+UINT32		overflowcntr;
+UINT32 		prechargecntr1 = 0;
+
+
+INT32			vpgain;
+INT32			vigain;
+INT32			ipgain;
+INT32			iigain;
+uint8_t 	GlobalState = 0;
+
+INT32	inputvoltageintegral = 0, outputvoltageintegral = 0;
+INT32	lastvoltage = 0;
+INT32	currentintegral = 0;
+INT32	lastcurrent = 0;
+INT32	voltageerror = 0;
+INT32	currenterror = 0;
+INT32	pterm, iterm, dterm = 0;
+INT32	voltageresult, currentresult = 0;
+UINT8	boostswitchmode, buckswitchmode;
+
+
+
+UINT8 SendingStepSnapshot = 0;
+
+void ReadInputVoltage(void);
+void ReadOutputVoltage(void);
+void ReadCurrent(void);
+INT8 CalcTemp(UINT32 resistance);
+void ReadTemperatures(void);
+void SendStatus1(void);
+void ControlOutput(void);
+void ToggleLED(void);
+void ProcessCANMessage(message_object *msg);
+void CheckEnable(void);
+void UpdateWaveform(void);
+void LimitsChecking(void);
+void ConverterON(void);
+void ConverterOFF(void);
+
+void DCDC_Init(void)
+{
+	UINT16		i;
+
+	targetinputvoltage = targetoutputvoltage = 0;
+	targetcurrent = 100;
+	mode = DCDC_MODE_START;
+	enabled = enable = FALSE;
+	warningcode = DCDC_WARNING_NONE;
+	errorcode = olderrorcode = DCDC_ERROR_NONE;
+	//frequency = oldfrequency = DCDC_DEFAULT_FREQUENCY;
+	//prechargestate = DCDC_SMPC_IDLE;
+	//dischargestate = DCDC_SMDC_IDLE;
+	warningcntr = 0;
+	dischargeON = false;
+	overflowcntr = 0;
+	buckswitchmode = DCDC_SWITCHMODE_OFF;
+	boostswitchmode = DCDC_SWITCHMODE_OFF;
+	buckduty = 1000;
+	boostduty = 0;
+
+	ConverterOFF();
+
+	ledtimeout = DCDC_SYSLED_TIMEOUT_IDLE;
+
+//	if (LPC_GPIO->PIN[0] & BIT_CANID)
+//	{	// R34 pulled UP
+//		canid = RC_BASE_CANID + 0x10;
+//		voltagems[RC_INPUTVOLTAGE_ARRAY] = 865;
+//		voltagecs[RC_INPUTVOLTAGE_ARRAY] = -3545;
+//		voltagems[RC_OUTPUTVOLTAGE_ARRAY] = 866;
+//		voltagecs[RC_OUTPUTVOLTAGE_ARRAY] = -91;
+//	}
+//	else
+//	{	// R34 pulled DOWN
+		canid = DCDC_BASE_CANID;
+//		voltagems[RC_INPUTVOLTAGE_ARRAY] = 862;
+//		voltagecs[RC_INPUTVOLTAGE_ARRAY] = -400;
+//		voltagems[RC_OUTPUTVOLTAGE_ARRAY] = 869;
+//		voltagecs[RC_OUTPUTVOLTAGE_ARRAY] = -782;
+//	}
+
+
+
+	// Initialise gains for no load - Mike 1/10/15
+//	vpgain = RC_NOLOAD_VOLTAGE_PGAIN;
+//	vigain = RC_NOLOAD_VOLTAGE_IGAIN;
+//	ipgain = RC_NOLOAD_CURRENT_PGAIN;
+//	iigain = RC_NOLOAD_CURRENT_IGAIN;
+
+	vpgain = DCDC_VOLTAGE_PGAIN;
+	vigain = DCDC_VOLTAGE_IGAIN;
+	ipgain = DCDC_CURRENT_PGAIN;
+	iigain = DCDC_CURRENT_IGAIN;
+
+}
+//************************************************************************************************************
+void DCDC_Main(void)
+{
+	canrxslot = CAN_RegisterMessage(DCDC_CAN_SETSTATE, STD_ID, RECEIVE);
+	cantxslot1 = CAN_RegisterMessage(DCDC_CAN_STATUS1, STD_ID, TRANSMIT);
+
+
+	/* Enable sequencers */
+	Chip_ADC_EnableSequencer(LPC_ADC0, ADC_SEQA_IDX);
+	Chip_ADC_EnableSequencer(LPC_ADC1, ADC_SEQA_IDX);
+
+	/* Manual start for ADCs ready for first calcs */
+	Chip_ADC_StartSequencer(LPC_ADC0, ADC_SEQA_IDX);
+	Chip_ADC_StartSequencer(LPC_ADC1, ADC_SEQA_IDX);
+}
+
+//************************************************************************************************************
+void DCDC_Step(void)
+{
+	static	UINT16	ledcntr = 0;
+	static  UINT16	rampcntr = 0;
+//	static  UINT16	cancntr = 0;
+	//static	UINT16	stepindex=0;
+	static UINT8	overflow = 0;
+
+	if (overflow == 1)
+	{
+		overflowcntr++;
+		return;
+	}
+
+	//CheckFaults();
+
+	ReadTemperatures();
+
+	ReadCurrent();
+	ReadInputVoltage();
+	ReadOutputVoltage();
+	Chip_ADC_StartSequencer(LPC_ADC1, ADC_SEQA_IDX);
+
+	LimitsChecking();
+
+	do {
+		canslot = CAN_RxPoll();
+
+		if (canslot == 0) break;
+		if (can_buff[canslot].id == DCDC_CAN_SETSTATE)
+		{
+			ProcessCANMessage(&can_buff[canslot]);
+			CANRxDone[canslot] = FALSE;
+		}
+		CANRxDone[canslot] = FALSE;
+	} while (canslot != 0);
+
+	if ((mode == DCDC_MODE_RUNNING_CV) || (mode == DCDC_MODE_RUNNING_CC))
+	{
+		if (outputcurrent > 0)
+		{
+			if (outputvoltage < targetoutputvoltage)
+			{
+				mode = DCDC_MODE_RUNNING_CC;
+			}
+			else
+			{
+				mode = DCDC_MODE_RUNNING_CV;
+			}
+		}
+		else
+		{
+			if (inputvoltage < targetinputvoltage)
+			{
+				mode = DCDC_MODE_RUNNING_CC;
+			}
+			else
+			{
+				mode = DCDC_MODE_RUNNING_CV;
+			}
+		}
+	}
+
+	if (mode == DCDC_MODE_RAMPING)
+	{
+//		if (rampcntr++ > 10)
+//		{
+		if (targetoutputvoltage < rampinguptargetoutputvoltage)
+		{
+			targetoutputvoltage++;
+		}
+		else if (targetoutputvoltage > rampinguptargetoutputvoltage)
+		{
+			targetoutputvoltage--;
+		}
+		else
+		{
+				mode = DCDC_MODE_RUNNING_CV;
+		}
+//			rampcntr = 0;
+//		}
+	}
+
+	if (mode >= DCDC_MODE_RAMPING)
+	{
+
+				ControlOutput();
+				UpdateWaveform();
+	}
+
+	if (warningcntr > DCDC_WARNING_LIMIT)
+	{
+		errorcode = warningcode;
+		mode = DCDC_MODE_SHUTTINGDOWN;
+	}
+	if (warningcntr > 0)
+	{
+		warningcntr--;
+	}
+	else
+	{
+		warningcode = DCDC_WARNING_NONE;
+	}
+
+	if (cancntr++ > DCDC_CAN_PERIOD)
+	{
+		SendStatus1();
+		cancntr = 0;
+	}
+
+	if (ledcntr++ > ledtimeout)
+	{
+		ToggleLED();
+		ledcntr = 0;
+	}
+
+	overflow = 0;
+}
+
+
+//************************************************************************************************************
+void ReadInputVoltage(void)
+{
+	INT32	raw;
+
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_INPUTV_CHANNEL));
+	raw *= (DCDC_INPUTV_FULL_SCALE * 1000);
+	raw = (raw >> 12);							/* raw is in mV */
+//	raw *= voltagems[RC_INPUTVOLTAGE_ARRAY];
+//	raw += voltagecs[RC_INPUTVOLTAGE_ARRAY];
+	if (raw < 0)
+	{
+		inputvoltage = 0;
+	}
+	else
+	{
+		inputvoltage = (raw/100L);				/* Convert from mV to decivolts */
+//		inputvoltage = 320;
+	}
+
+
+}
+
+//************************************************************************************************************
+void ReadOutputVoltage(void)
+{
+	INT32	raw;
+
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_OUTPUTV_CHANNEL));
+	raw *= (DCDC_OUTPUTV_FULL_SCALE * 1000);
+	raw = (raw >> 12);							/* raw is in mV */
+//	raw *= voltagems[RC_OUTPUTVOLTAGE_ARRAY];
+//	raw += voltagecs[RC_OUTPUTVOLTAGE_ARRAY];
+	if (raw < 0)
+	{
+		outputvoltage = 0;
+	}
+	else
+	{
+		outputvoltage = (raw/100L);				/* Convert from mV to decivolts */
+	}
+
+
+}
+
+//************************************************************************************************************
+void ReadCurrent(void)
+{
+	//UINT16	i;
+	//static	UINT16 index = 0;
+	INT32	raw;
+	INT32	rawvoltage;
+
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_OUTPUTI_CHANNEL));
+	raw *= 3300;
+	rawvoltage = (raw >> 12);							/* Voltage offset is in mV */
+	rawvoltage -= DCDC_OUTPUTI_VOLTAGE_OFFSET;
+	outputcurrent = (DCDC_OUTPUTI_FULL_SCALE * 330) / rawvoltage;		/* Output current is in 0.1A, i.e. 23.7A would be 237 */
+
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_APHASECURRENT_CHANNEL));
+	raw *= 3300;
+	rawvoltage = (raw >> 12);							/* Voltage offset is in mV */
+	rawvoltage -= DCDC_PHASEI_VOLTAGE_OFFSET;
+	phaseAcurrent = (DCDC_PHASEI_FULL_SCALE * 330) / rawvoltage;		/* Phase current is in 0.1A, i.e. 23.7A would be 237 */
+
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_BPHASECURRENT_CHANNEL));
+	raw *= 3300;
+	rawvoltage = (raw >> 12);										/* Voltage reading is in mV */
+	rawvoltage -= DCDC_PHASEI_VOLTAGE_OFFSET;
+	phaseBcurrent = (DCDC_PHASEI_FULL_SCALE * 330) / rawvoltage;		/* Phase current is in 0.1A, i.e. 23.7A would be 237 */
+
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_CPHASECURRENT_CHANNEL));
+	raw *= 3300;
+	rawvoltage = (raw >> 12);										/* Voltage reading is in mV */
+	rawvoltage -= DCDC_PHASEI_VOLTAGE_OFFSET;
+	phaseCcurrent = (DCDC_PHASEI_FULL_SCALE * 330) / rawvoltage;		/* Phase current is in 0.1A, i.e. 23.7A would be 237 */
+
+}
+
+
+//************************************************************************************************************
+INT8 CalcTemp(UINT32 resistance)
+{
+	UINT8	i;
+	INT8 t;
+	INT32	deltaR;
+
+	//return ((uint8_t)resistance);			/* Debug code to see resistances */
+
+	i = t = 0;
+	while (resistance < thermistorResistances[i])
+	{
+		if (i++>=sizeof(thermistorTemperatures))
+		{
+			break;
+		}
+	};
+
+	if (i>=sizeof(thermistorTemperatures))
+	{
+		t = thermistorTemperatures[i-1];
+	}
+	else if ((i > 0) && (i <sizeof(thermistorTemperatures)))
+	{
+		deltaR = thermistorResistances[i-1]-thermistorResistances[i];
+		t = (UINT8)(((UINT32)5 * (resistance - thermistorResistances[i])/deltaR));
+		t += thermistorTemperatures[i];
+	}
+	else
+	{
+		t = thermistorTemperatures[i-1];
+	}
+	return t;
+}
+
+//************************************************************************************************************
+void ReadTemperatures(void)
+{
+	UINT32	raw, resistance;
+
+	/* Read TEMP1 temperature */
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_ATEMP_CHANNEL));
+	raw *= 3300;
+	raw = (raw >> 12);				/* raw is now in mV */
+	resistance = (raw * DCDC_TEMP_RESISTOR) / (DCDC_TEMP_SUPPLYV - raw);		/* R = (Vtemp x Rpullup)/(Vsupply - Vtemp) */
+	temp1 = CalcTemp(resistance);
+
+	/* Read TEMP2 temperature */
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_BTEMP_CHANNEL));
+	raw *= 3300;
+	raw = (raw >> 12);				/* raw is now in mV */
+	resistance = (raw * DCDC_TEMP_RESISTOR) / (DCDC_TEMP_SUPPLYV - raw);		/* R = (Vtemp x Rpullup)/(Vsupply - Vtemp) */
+	temp2 = CalcTemp(resistance);
+
+	/* Read TEMP2 temperature */
+	raw = ADC_DR_RESULT(Chip_ADC_GetDataReg(LPC_ADC1, DCDC_CTEMP_CHANNEL));
+	raw *= 3300;
+	raw = (raw >> 12);				/* raw is now in mV */
+	resistance = (raw * DCDC_TEMP_RESISTOR) / (DCDC_TEMP_SUPPLYV - raw);		/* R = (Vtemp x Rpullup)/(Vsupply - Vtemp) */
+	temp2 = CalcTemp(resistance);
+}
+
+//************************************************************************************************************
+void SendStatus1(void)
+{
+	CAN_MSG	msg;
+		msg.id = DCDC_CAN_STATUS1;
+		msg.dlc = 8;
+		msg.extended = TRUE;
+		msg.data.word[0] = inputvoltage;
+		//msg.data.word[1] = (phaseAcurrent + phaseBcurrent + phaseCcurrent) / 3;
+		msg.data.word[1] = voltageresult;
+		msg.data.word[2] = outputvoltage;
+		//msg.data.word[3] = outputcurrent;
+		//msg.data.word[3] = mode + (errorcode << 8);
+		msg.data.word[3] = buckswitchmode + (boostswitchmode << 8);
+
+		CAN_SendMessage(cantxslot1, &msg);
+}
+//************************************************************************************************************
+
+
+/* Gains are 1024 times bigger than real life so a gain value of 1024 represents a gain of 1.000 */
+//#define VOLTAGE_PGAIN			0x5000										/* 1024 (0x400) is 1.00, 0x5000 is 20x */
+//#define VOLTAGE_IGAIN			0xC800										/* 1024 (0x400) is 1.00, 0xC800 is 50x */
+#define VOLTAGE_DGAIN			0											/* 1024 (0x400) is 1.00 */
+//#define CURRENT_PGAIN			0x400										/* 1024 (0x400) is 1.00 */
+//#define CURRENT_IGAIN			0x12C00										/* 1024 (0x400) is 1.00, 0x12C00 is 75x */
+#define CURRENT_DGAIN			0											/* 1024 (0x400) is 1.00 */
+
+#define VOLTAGE_PGAIN			vpgain
+#define VOLTAGE_IGAIN			vigain
+#define CURRENT_PGAIN			ipgain
+#define CURRENT_IGAIN			iigain
+
+
+//************************************************************************************************************
+void ControlOutput(void)
+{
+// Made these variables global so that the integral terms can be reset by the state machine on start-up. Mike
+//    static    INT32        voltageintegral = 0;
+//    static    INT32        lastvoltage = 0;
+//    static    INT32        currentintegral = 0;
+//    static    INT32        lastcurrent = 0;
+//    INT32    voltageerror;
+//    INT32    currenterror;
+//    INT32    pterm, iterm, dterm;
+//    INT32    voltageresult, currentresult;
+//    INT32    attenuation;
+
+		voltageerror = targetoutputvoltage - outputvoltage;                /* Error in voltage demand, positive means we need more voltage i.e. less phase shift */
+		//voltageerror = outputvoltage - targetoutputvoltage;				/* Error in voltage demand, position error means voltage too high, need less voltage i.e. more phase shift */
+
+		/* Calculation proportional term */
+		pterm = (voltageerror * VOLTAGE_PGAIN) / 10;
+
+		/* Calculation integral term */
+		iterm = outputvoltageintegral + ((voltageerror * VOLTAGE_IGAIN) / 10);
+		if (iterm > DCDC_VOLTAGECONTROL_SATURATION)
+			{
+			iterm = DCDC_VOLTAGECONTROL_SATURATION;        /* saturation */
+			}
+		if (iterm < -DCDC_VOLTAGECONTROL_SATURATION)
+			{
+			iterm = -DCDC_VOLTAGECONTROL_SATURATION;   /* saturation */
+			}
+
+		outputvoltageintegral = iterm;
+
+		/* Calculation differential term */
+		dterm = ((voltageerror - lastvoltage) * VOLTAGE_DGAIN) / 10;
+		dterm = 0;                                    /* No differential control at the moment */
+
+		lastvoltage = outputvoltage;                                /* Remember voltage for differential calc next time through */
+
+		voltageresult = pterm + iterm + dterm;
+
+//		if ((outputcurrent < 20) && (outputcurrent >-20))  									// Aw (17/10/16) - reduce gains at low current load: current is in 0.1As
+//		{
+//			voltageresult = voltageresult*0.5;
+//		}
+
+		if (voltageresult > DCDC_VOLTAGECONTROL_SATURATION)
+		{
+			voltageresult = DCDC_VOLTAGECONTROL_SATURATION;
+		}
+		if (voltageresult < (-DCDC_VOLTAGECONTROL_SATURATION))
+		{
+			voltageresult = -DCDC_VOLTAGECONTROL_SATURATION;
+		}
+
+    /* Now calculate the current control */
+    //currenterror = outputcurrent - targetcurrent;                /* Output current and target current are in deciamps */
+		currenterror = targetcurrent - outputcurrent;                /* Output current and target current are in deciamps */
+
+        /* Calculation proportional term */
+    pterm = (currenterror * CURRENT_PGAIN) / 10;
+
+    /* Calculation integral term */
+    iterm = currentintegral + ((currenterror * CURRENT_IGAIN) / 10);
+    if (iterm > DCDC_CURRENTCONTROL_SATURATION)
+    	{
+    	iterm = DCDC_CURRENTCONTROL_SATURATION; // Commented 2 lines out as the whole currentresult- is limited
+    	}
+    if (iterm < -DCDC_CURRENTCONTROL_SATURATION)
+    	{
+    	iterm = -DCDC_CURRENTCONTROL_SATURATION;
+    	}
+    //    if (iterm < -RC_CURRENTCONTROL_SATURATION) iterm = 0;/* saturation  - Changed back to line above - Mike 6/10/15*/
+    currentintegral = iterm;
+
+    /* Calculation differential term */
+    dterm = ((currenterror - lastcurrent) * CURRENT_DGAIN) / 10;
+    dterm = 0;                                    /* No differential control at the moment */
+
+    lastcurrent = outputcurrent;
+
+    currentresult = pterm + iterm + dterm;
+
+
+    /* Cap output of control algorithm between 0 and 2000, the latter being maximum attenuation */
+    if (currentresult > DCDC_CURRENTCONTROL_SATURATION)
+    {
+    	currentresult = DCDC_CURRENTCONTROL_SATURATION;
+    }
+    if (currentresult < 1)
+    {
+    	currentresult = 0;
+    }
+
+    if (voltageresult > 0)
+//    if (inputvoltage < targetoutputvoltage)
+    {
+    	if (voltageresult > 360) voltageresult = 360;
+
+    	boostduty = voltageresult;
+    	//boostduty = 150;
+
+    	buckduty = DCDC_VOLTAGE_BIAS;
+    }
+    else
+    {
+//    	if (voltageresult > 0)
+//    	{
+//    		boostduty = 0;
+//    		buckduty = DCDC_VOLTAGE_BIAS;
+//    	}
+//    	else
+//    	{
+    		boostduty = 0;
+    		buckduty = (DCDC_VOLTAGE_BIAS) + voltageresult;
+//    	}
+    }
+
+    if (boostduty < DCDC_MIN_PWM)
+    {
+    	boostduty = 0; //DCDC_MIN_PWM;
+    	boostswitchmode = DCDC_SWITCHMODE_STATIC;
+    }
+    else
+    {
+    	boostswitchmode = DCDC_SWITCHMODE_PWM;
+    }
+
+    if (buckduty > DCDC_MAX_PWM)
+    {
+    	buckduty = DCDC_MAX_PWM;
+    	buckswitchmode = DCDC_SWITCHMODE_STATIC;
+    }
+    else
+    {
+    	buckswitchmode = DCDC_SWITCHMODE_PWM;
+    }
+
+    //boostswitchmode = buckswitchmode = DCDC_SWITCHMODE_STATIC;
+}
+
+
+
+//************************************************************************************************************
+void ToggleLED(void)
+{
+	static UINT8	ledstate = 0;
+
+	if (ledstate)
+	{
+		LPC_GPIO->CLR[2] = BIT_SYS_LED;
+		ledstate = 0;
+	}
+	else
+	{
+		LPC_GPIO->SET[2] = BIT_SYS_LED;
+		ledstate = 1;
+	}
+}
+
+
+//************************************************************************************************************
+void ProcessCANMessage(message_object *msg)
+{
+	UINT16	voltage, current;
+	UINT8	temp;
+
+		/* First word is target output voltage in 0.1v    (output = LV side)*/
+		voltage = msg->data[0];
+		if (voltage > (DCDC_MAX_OUTPUT_VOLTS * 10))
+		{
+			warningcode = DCDC_WARNING_COMMS;
+			warningcntr += 5;
+		}
+		targetoutputvoltage = voltage;
+//		targetoutputvoltage = 250;
+
+		/* second word is output current in 0.1amps */
+		current = msg->data[1];
+		if (current > (DCDC_MAX_OUTPUT_CURRENT * 10))
+		{
+			warningcode = DCDC_WARNING_COMMS;
+			warningcntr += DCDC_WARNINGCNTR_UP_RATE;
+		}
+//		targetcurrent = ((UINT32)current);			// Target current is in deciamps
+		targetcurrent = 500;
+
+		temp = (msg->data[2] >> 8);
+		if (temp)
+		{
+			LPC_GPIO->CLR[2] = BIT_LED_GENERIC;
+			errorcode = DCDC_ERROR_NONE;
+			ConverterON();
+			rampinguptargetoutputvoltage = targetoutputvoltage;
+			targetoutputvoltage = outputvoltage;
+//			boostduty = 500;
+//			buckduty = 600;
+//			UpdateWaveform();
+		}
+		else
+		{
+			LPC_GPIO->SET[2] = BIT_LED_GENERIC;
+			ConverterOFF();
+		}
+}
+
+//************************************************************************************************************
+void ConverterON(void)
+{
+	UINT32 periodticks;
+
+	periodticks = DCDC_OSC_FREQUENCY / (DCDC_SWITCH_FREQUENCY);			// Period ticks is actual period (different to SCT calc!
+	//periodticks = periodticks & 0xFFFFFFFE; 							// force to even
+	periodticks /= 3;													// Find a third of the period
+
+	LPC_SCT0->COUNT_L = 0;
+	LPC_SCT1->COUNT_L = periodticks;
+	LPC_SCT2->COUNT_L = periodticks;
+	LPC_SCT2->CTRL_L |= 1;									// Set SCT2 counter to start counting down
+
+    LPC_SCT0->CTRL_L           &= ~(1 << 2);               // start timer
+    LPC_SCT1->CTRL_L           &= ~(1 << 2);               // start timer
+    LPC_SCT2->CTRL_L           &= ~(1 << 2);               // start timer
+#ifdef		ADVANCED_WELDING
+    LPC_GPIO->CLR[0]				= BIT_GATE_BUF_ENABLE;
+#endif
+#ifdef		STERLING_POWER
+    LPC_GPIO->CLR[1]				= BIT_GATE_BUF_ENABLE;
+#endif
+	LPC_GPIO->SET[2] = BIT_FAULT;	/* Clear fault bit */
+	mode = DCDC_MODE_RAMPING;
+}
+
+//************************************************************************************************************
+void ConverterOFF(void)
+{
+    LPC_SCT0->CTRL_L           |= (1 << 2);               // stop timer
+    LPC_SCT1->CTRL_L           |= (1 << 2);               // stop timer
+    LPC_SCT2->CTRL_L           |= (1 << 2);               // stop timer
+
+#ifdef		ADVANCED_WELDING
+    LPC_GPIO->SET[0]				= BIT_GATE_BUF_ENABLE;
+#endif
+#ifdef		STERLING_POWER
+    LPC_GPIO->SET[1]				= BIT_GATE_BUF_ENABLE;
+#endif
+    LPC_SCT0->OUTPUT			= 0;						/* Set all outputs off on Phase A */
+    LPC_SCT1->OUTPUT			= 0;						/* Set all outputs off on Phase B */
+    LPC_SCT2->OUTPUT			= 0;						/* Set all outputs off on Phase C */
+    mode = DCDC_MODE_START;
+	buckswitchmode = boostswitchmode = DCDC_SWITCHMODE_OFF;
+}
+
+//************************************************************************************************************
+void UpdateWaveform(void)
+{
+	UINT32 periodticks;
+	UINT32 buckdutyticks, boostdutyticks;
+
+	/* Disable ADC interrupts */
+//	Chip_ADC_DisableInt(LPC_ADC0,ADC_INTEN_SEQA_ENABLE); 			// AW 08/11/16 - disables ADC Interrupt generation
+//	Chip_ADC_DisableInt(LPC_ADC1,ADC_INTEN_SEQA_ENABLE);			// AW 08/11/16 - disables ADC Interrupt generation
+
+	periodticks = DCDC_OSC_FREQUENCY / (DCDC_SWITCH_FREQUENCY * 2);
+	periodticks = periodticks & 0xFFFFFFFE; 							// force to even
+
+	buckdutyticks = (periodticks * buckduty) / 1000;
+
+	LPC_SCT0->CONFIG |= (1 << 7);	// Stop reload process for L counter
+	/* Match 1/event 1 is rising edge of buck FET in, boost SR out of phase A */
+	LPC_SCT0->MATCHREL[1].L       = (periodticks) - (buckdutyticks - (DCDC_DEADTIME_TICKS/2));
+
+	/* Match 2/event 2 is falling edge of buck FET in, boost SR out of phase A */
+	LPC_SCT0->MATCHREL[2].L       = (periodticks) - (buckdutyticks - (DCDC_DEADTIME_TICKS/2));
+
+	/* Match 3/event 3 is rising edge of buck SR in, boost FET out of phase A */
+	LPC_SCT0->MATCHREL[3].L       = (periodticks) - (buckdutyticks + (DCDC_DEADTIME_TICKS/2));
+
+	/* Match 4/event 4 is falling edge of buck SR in, boost FET out of phase A */
+	LPC_SCT0->MATCHREL[4].L       = (periodticks) - (buckdutyticks + (DCDC_DEADTIME_TICKS/2));
+
+//	if (buckswitchmode == DCDC_SWITCHMODE_PWM)
+//	{
+//		LPC_SCT0->OUT[0].SET        = 	(1 << 1)	;           // event 1 sets   OUT0
+//	    LPC_SCT0->OUT[0].CLR        = 	(1 << 2)	;           // event 2 clears OUT0
+//	    LPC_SCT0->OUT[1].CLR        = 	(1 << 3)	;           // event 3 clears   OUT1
+//	    LPC_SCT0->OUT[1].SET		= 	(1 << 4)	;           // event 4 sets OUT1
+//	}
+//	else if (buckswitchmode == DCDC_SWITCHMODE_STATIC)
+//	{
+//	    LPC_SCT0->OUT[0].SET        = 	(1 << 1)	;           // event 1 sets   OUT0
+//	    LPC_SCT0->OUT[0].SET        = 	(1 << 2)	;           // event 2 clears OUT0		** Should be CLR **
+//	    LPC_SCT0->OUT[1].CLR        = 	(1 << 3)	;           // event 3 sets   OUT1
+//	    LPC_SCT0->OUT[1].CLR        = 	(1 << 4)	;           // event 4 clears OUT1		** Should be SET **
+//	}
+//	else
+//	{
+	    //LPC_SCT0->OUTPUT			&= 0xFFFFFFFC;						/* Set buck outputs off on Phase A */
+	    //LPC_SCT1->OUTPUT			&= 0xFFFFFFFC;						/* Set buck outputs off on Phase B */
+	    //LPC_SCT2->OUTPUT			&= 0xFFFFFFFC;						/* Set buck outputs off on Phase C */
+//	}
+
+	if (boostswitchmode == DCDC_SWITCHMODE_PWM)
+	{
+		boostdutyticks = (periodticks * boostduty) / 1000;
+
+		/* Match 5/event 5 is rising edge of boost SR in, buck FET out of phase A  */
+		LPC_SCT0->MATCHREL[5].L       = (periodticks) - (boostdutyticks + (DCDC_DEADTIME_TICKS/2));
+
+		/* Match 6/event 6 is falling edge of boost SR in, buck FET out of phase A */
+		LPC_SCT0->MATCHREL[6].L       = (periodticks) - (boostdutyticks + (DCDC_DEADTIME_TICKS/2));
+
+		/* Match 7/event 7 is rising edge of boost FET in, buck SR out of phase A */
+		LPC_SCT0->MATCHREL[7].L       = (periodticks) - (boostdutyticks - (DCDC_DEADTIME_TICKS/2));
+
+		/* Match 8/event 8 is falling edge of boost FET in, buck SR out of phase A */
+		LPC_SCT0->MATCHREL[8].L       = (periodticks) - (boostdutyticks - (DCDC_DEADTIME_TICKS/2));
+
+	    LPC_SCT0->OUT[2].CLR        = 	(1 << 5)	;           // event 5 clears   OUT2
+	    LPC_SCT0->OUT[2].SET        = 	(1 << 6)	;           // event 6 sets OUT2
+	    LPC_SCT0->OUT[3].SET        = 	(1 << 7)	;           // event 7 sets   OUT3
+	    LPC_SCT0->OUT[3].CLR        = 	(1 << 8)	;           // event 8 clears OUT3
+	}
+	else if (boostswitchmode == DCDC_SWITCHMODE_STATIC)
+	{
+	    LPC_SCT0->OUT[2].SET        = 	(1 << 5)	;           // event 5 sets   OUT2		/* Should be CLR */
+	    LPC_SCT0->OUT[2].SET        = 	(1 << 6)	;           // event 6 clears OUT2
+	    LPC_SCT0->OUT[3].CLR        = 	(1 << 7)	;           // event 7 clears OUT3		/* Should be SET */
+	    LPC_SCT0->OUT[3].CLR        = 	(1 << 8)	;           // event 8 sets OUT3
+	}
+	else
+	{
+	    //LPC_SCT0->OUTPUT			&= 0xFFFFFFF3;						/* Set boost outputs off on Phase A */
+	    //LPC_SCT1->OUTPUT			&= 0xFFFFFFF3;						/* Set boost outputs off on Phase B */
+	    //LPC_SCT2->OUTPUT			&= 0xFFFFFFF3;						/* Set boost outputs off on Phase C */
+	}
+	LPC_SCT0->CONFIG &= ~(1 << 7);	// Start reload process for L counter
+
+    	/* Enable ADC interrupts */
+//	Chip_ADC_EnableInt(LPC_ADC0,ADC_INTEN_SEQA_ENABLE); 		// AW 08/11/16 - Enables ADC Interrupt generation
+//	Chip_ADC_EnableInt(LPC_ADC1,ADC_INTEN_SEQA_ENABLE);			// AW 08/11/16 - Enables ADC Interrupt generation
+}
+
+//************************************************************************************************************
+void LimitsChecking(void)
+{
+	if (outputvoltage > (DCDC_MAX_OUTPUT_VOLTS * 10))
+	{
+		ConverterOFF();
+		LPC_GPIO->CLR[2] = BIT_FAULT;
+		mode = DCDC_MODE_ERROR;
+		errorcode = DCDC_ERROR_HIGH_OUTPUT_VOLTAGE;
+	}
+	if (outputcurrent > (DCDC_MAX_OUTPUT_CURRENT * 10))
+	{
+		ConverterOFF();
+		LPC_GPIO->CLR[2] = BIT_FAULT;
+		mode = DCDC_MODE_ERROR;
+		errorcode = DCDC_ERROR_OVER_CURRENT;
+	}
+}
+
+
+//************************************************************************************************************
+void CheckFaults(void)
+{
+
+}
+
